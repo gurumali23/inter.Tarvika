@@ -1,0 +1,7 @@
+# Deployment guide
+
+Host the contents of `intern-tarvika/` as a static site on the owner-approved provider and map the approved `intern.tarvika` hostname. No provider account or deployment configuration was available, so this is provider-neutral. Ensure canonical URL and sitemap agree with the selected hostname, configure a branded 404 fallback, enforce HTTPS, and avoid deploying sample opportunity data as official vacancy data.
+
+At the edge/host, configure security headers, adapting policy to actual external dependencies. Suggested starting policy: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' <verified-api-origin>; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self' mailto:`. Remove the remote Google Fonts import or authorize it explicitly in policy. Also set `Strict-Transport-Security` after HTTPS is verified, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`, and a suitable `Permissions-Policy`. Validate CSP in report-only mode before enforcement. Never add API credentials or private keys to this static site.
+
+Before release, install the official logo as the unchanged TARVIKA asset, verify contact information and legal pages, replace/disable demo opportunity data, connect backend services only after security review, and run responsive/accessibility/security checks. No production deployment has occurred.
