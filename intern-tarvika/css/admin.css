@@ -990,3 +990,16 @@ body.admin-body {
     align-items: stretch;
   }
 }
+
+/* Suppress browser autofill background tint */
+#staff-email:-webkit-autofill,
+#staff-email:-webkit-autofill:hover,
+#staff-email:-webkit-autofill:focus,
+#staff-password:-webkit-autofill,
+#staff-password:-webkit-autofill:hover,
+#staff-password:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0 1000px #ffffff inset !important;
+  -webkit-text-fill-color: #18221b !important;
+  transition: background-color 5000s ease-in-out 0s;
+}
+

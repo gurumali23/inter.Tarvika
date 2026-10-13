@@ -1,6 +1,6 @@
 // ==========================================================================
 // TARVIKA Research & Technology - Executive Admin Panel
-// Firebase SDK v13.0.0 Module Integration
+// Firebase SDK v13.0.0 Restricted Administrative Access
 // ==========================================================================
 
 import { initializeApp } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-app.js";
@@ -10,7 +10,9 @@ import {
   signInWithEmailAndPassword, 
   signOut, 
   onAuthStateChanged,
-  createUserWithEmailAndPassword
+  updatePassword,
+  GoogleAuthProvider,
+  signInWithPopup
 } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-auth.js";
 import { 
   getDatabase, 
@@ -20,11 +22,10 @@ import {
   update, 
   remove, 
   onValue, 
-  push,
-  child
+  push
 } from "https://www.gstatic.com/firebasejs/13.0.0/firebase-database.js";
 
-// Official Firebase configuration provided for TARVIKA Internship Panel
+// Official Firebase configuration for TARVIKA Internship Panel
 const firebaseConfig = {
   apiKey: "AIzaSyA-mxmLqYEkKRrNTvMsWrF03IoWw7FK5iQ",
   authDomain: "tarvika-intership-pannel.firebaseapp.com",
@@ -36,18 +37,26 @@ const firebaseConfig = {
   measurementId: "G-VMLMRRVF6H"
 };
 
+// Authorized Admin Emails Whitelist (Restricted Access)
+const AUTHORIZED_ADMIN_EMAILS = [
+  'admin@tarvika.com',
+  'admin@tarvikart.com',
+  'director@tarvikart.com'
+];
+
 // Initialize Firebase SDK services
 const app = initializeApp(firebaseConfig);
 let analytics = null;
-try { analytics = getAnalytics(app); } catch (e) { console.warn('Analytics init warning:', e); }
+try { analytics = getAnalytics(app); } catch (e) { console.warn('Analytics warning:', e); }
 const auth = getAuth(app);
 const db = getDatabase(app);
 
-// State Store
+// Application State
 const state = {
   user: null,
   applications: [],
   opportunities: [],
+  authorizedAdmins: [],
   activeTab: 'overview',
   searchQuery: '',
   filterProgram: '',
@@ -93,14 +102,119 @@ function showToast(message, type = 'info') {
 }
 
 // --------------------------------------------------------------------------
-// Auth & Session Management
+// Authorization & Multi-Admin Session Management
 // --------------------------------------------------------------------------
+function getLocalCustomAdmins() {
+  try {
+    return JSON.parse(localStorage.getItem('tarvika_custom_admins') || '[]');
+  } catch {
+    return [];
+  }
+}
+
+function saveLocalCustomAdmin(email) {
+  if (!email) return;
+  const list = getLocalCustomAdmins();
+  const norm = email.toLowerCase().trim();
+  if (!list.includes(norm)) {
+    list.push(norm);
+    localStorage.setItem('tarvika_custom_admins', JSON.stringify(list));
+  }
+}
+
+function removeLocalCustomAdmin(email) {
+  if (!email) return;
+  const norm = email.toLowerCase().trim();
+  try {
+    let list = getLocalCustomAdmins();
+    list = list.filter(e => e.toLowerCase() !== norm);
+    localStorage.setItem('tarvika_custom_admins', JSON.stringify(list));
+  } catch {}
+}
+
+function generateSecurePassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789!@#$%&*';
+  let pwd = 'Admin@';
+  for (let i = 0; i < 8; i++) {
+    pwd += chars.charAt(Math.floor(Math.random() * chars.length));
+  }
+  return pwd;
+}
+
+async function verifyAdminAuthorization(user) {
+  if (!user || !user.email) return false;
+  const emailNorm = user.email.toLowerCase().trim();
+
+  // 1. Direct static whitelist match
+  if (AUTHORIZED_ADMIN_EMAILS.map(e => e.toLowerCase()).includes(emailNorm)) {
+    return true;
+  }
+
+  // 2. Check local custom admins whitelist cache
+  const cachedAdmins = getLocalCustomAdmins();
+  if (cachedAdmins.includes(emailNorm)) {
+    return true;
+  }
+
+  // 3. Realtime Database /authorized_admins check by UID or email
+  try {
+    if (user.uid) {
+      const adminSnap = await get(ref(db, `authorized_admins/${user.uid}`));
+      if (adminSnap.exists()) {
+        const val = adminSnap.val();
+        if (val && val.status !== 'revoked') {
+          saveLocalCustomAdmin(emailNorm);
+          return true;
+        }
+      }
+    }
+
+    // Check by email in authorized_admins collection
+    const allAdminsSnap = await get(ref(db, 'authorized_admins'));
+    if (allAdminsSnap.exists()) {
+      const records = allAdminsSnap.val();
+      const match = Object.values(records).some(r => 
+        r && r.email && r.email.toLowerCase() === emailNorm && r.status !== 'revoked'
+      );
+      if (match) {
+        saveLocalCustomAdmin(emailNorm);
+        return true;
+      }
+    }
+  } catch (err) {
+    console.warn('RTDB admin verification warning:', err);
+    // Fallback REST check
+    try {
+      const res = await fetch(`${firebaseConfig.databaseURL.replace(/\/+$/, '')}/authorized_admins.json`);
+      const records = await res.json();
+      if (records && typeof records === 'object') {
+        const match = Object.values(records).some(r => 
+          r && r.email && r.email.toLowerCase() === emailNorm && r.status !== 'revoked'
+        );
+        if (match) {
+          saveLocalCustomAdmin(emailNorm);
+          return true;
+        }
+      }
+    } catch {}
+  }
+
+  return false;
+}
+
 function checkSavedSession() {
   const saved = localStorage.getItem('tarvika_admin_session');
   if (saved) {
     try {
-      state.user = JSON.parse(saved);
-      return true;
+      const u = JSON.parse(saved);
+      if (u && u.email) {
+        const emailNorm = u.email.toLowerCase();
+        const cached = getLocalCustomAdmins();
+        if (AUTHORIZED_ADMIN_EMAILS.map(e => e.toLowerCase()).includes(emailNorm) || cached.includes(emailNorm) || u.role) {
+          state.user = u;
+          return true;
+        }
+      }
     } catch {}
   }
   return false;
@@ -112,22 +226,161 @@ function setAdminSession(user) {
   renderAdminApp();
 }
 
-function clearAdminSession() {
+async function clearAdminSession() {
   state.user = null;
   localStorage.removeItem('tarvika_admin_session');
-  try { signOut(auth); } catch {}
+  try { await signOut(auth); } catch {}
   renderLoginView();
+}
+
+// REST fallback for fetching authorized admins
+async function fetchAuthorizedAdminsREST() {
+  try {
+    const res = await fetch(`${firebaseConfig.databaseURL.replace(/\/+$/, '')}/authorized_admins.json`);
+    const data = await res.json();
+    if (data && typeof data === 'object') {
+      state.authorizedAdmins = Object.entries(data).map(([id, item]) => ({
+        id,
+        ...item
+      }));
+      state.authorizedAdmins.forEach(a => {
+        if (a.email && a.status !== 'revoked') saveLocalCustomAdmin(a.email);
+      });
+    }
+  } catch (err) {
+    console.warn('fetchAuthorizedAdminsREST warning:', err);
+  }
+}
+
+// Add / Authorize a new admin Gmail or corporate email
+async function addAuthorizedAdmin({ email, name, role, password }) {
+  const emailNorm = (email || '').toLowerCase().trim();
+  if (!emailNorm || !emailNorm.includes('@')) {
+    throw new Error('Please enter a valid email address (e.g., colleague@gmail.com).');
+  }
+  if (!password || password.length < 8) {
+    throw new Error('Password must be at least 8 characters long.');
+  }
+
+  let userUid = null;
+
+  // 1. Create account in Firebase Authentication via REST
+  try {
+    const res = await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=${firebaseConfig.apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: emailNorm,
+        password: password,
+        returnSecureToken: true
+      })
+    });
+    const authData = await res.json();
+    if (authData.error) {
+      if (authData.error.message === 'EMAIL_EXISTS') {
+        console.log('User already exists in Firebase Auth, authorizing in RTDB directly.');
+      } else {
+        throw new Error(authData.error.message || 'Firebase Auth account creation failed.');
+      }
+    } else if (authData.localId) {
+      userUid = authData.localId;
+    }
+  } catch (authErr) {
+    if (!authErr.message || !authErr.message.includes('EMAIL_EXISTS')) {
+      console.warn('Firebase Auth note:', authErr);
+    }
+  }
+
+  // 2. Generate key in RTDB
+  const rtdbKey = userUid || ('admin_' + btoa(emailNorm).replace(/[/+=]/g, '_'));
+
+  // 3. Save admin record in RTDB /authorized_admins
+  const record = {
+    email: emailNorm,
+    name: (name || '').trim() || 'Co-Administrator',
+    role: role || 'Co-Administrator',
+    status: 'active',
+    createdAt: Date.now(),
+    addedBy: state.user?.email || 'admin@tarvika.com'
+  };
+
+  try {
+    await set(ref(db, `authorized_admins/${rtdbKey}`), record);
+  } catch {
+    await fetch(`${firebaseConfig.databaseURL.replace(/\/+$/, '')}/authorized_admins/${rtdbKey}.json`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(record)
+    });
+  }
+
+  // 4. Update local cache
+  saveLocalCustomAdmin(emailNorm);
+
+  // 5. Update local state
+  const existingIdx = state.authorizedAdmins.findIndex(a => a.id === rtdbKey || (a.email && a.email.toLowerCase() === emailNorm));
+  if (existingIdx >= 0) {
+    state.authorizedAdmins[existingIdx] = { id: rtdbKey, ...record };
+  } else {
+    state.authorizedAdmins.unshift({ id: rtdbKey, ...record });
+  }
+
+  return { email: emailNorm, rtdbKey, record };
+}
+
+// Revoke an authorized admin
+async function revokeAuthorizedAdmin(adminId, email) {
+  const emailNorm = (email || '').toLowerCase().trim();
+  if (emailNorm === 'admin@tarvika.com') {
+    throw new Error('The primary super administrator account (admin@tarvika.com) cannot be removed.');
+  }
+
+  try {
+    await remove(ref(db, `authorized_admins/${adminId}`));
+  } catch {
+    await fetch(`${firebaseConfig.databaseURL.replace(/\/+$/, '')}/authorized_admins/${adminId}.json`, {
+      method: 'DELETE'
+    });
+  }
+
+  removeLocalCustomAdmin(emailNorm);
+  state.authorizedAdmins = state.authorizedAdmins.filter(a => a.id !== adminId && (a.email || '').toLowerCase() !== emailNorm);
 }
 
 // --------------------------------------------------------------------------
 // Realtime Database Listeners & Operations
 // --------------------------------------------------------------------------
 function setupDatabaseListeners() {
-  // 1. Immediate REST fetch for zero latency display
   fetchRegistrationsREST();
   fetchOpportunitiesREST();
+  fetchAuthorizedAdminsREST();
 
-  // 2. Realtime listener for registrations
+  try {
+    const adminsRef = ref(db, 'authorized_admins');
+    onValue(adminsRef, snapshot => {
+      const data = snapshot.val();
+      if (data && typeof data === 'object') {
+        state.authorizedAdmins = Object.entries(data).map(([id, item]) => ({
+          id,
+          ...item
+        }));
+        state.authorizedAdmins.forEach(a => {
+          if (a.email && a.status !== 'revoked') saveLocalCustomAdmin(a.email);
+        });
+      } else {
+        state.authorizedAdmins = [];
+      }
+      if (state.activeTab === 'system') {
+        renderAuthorizedAdminsList();
+      }
+    }, err => {
+      console.warn('Admins listener error:', err);
+      fetchAuthorizedAdminsREST();
+    });
+  } catch (e) {
+    console.warn('Admins listener setup error:', e);
+  }
+
   try {
     const regRef = ref(db, 'registrations');
     onValue(regRef, snapshot => {
@@ -145,16 +398,15 @@ function setupDatabaseListeners() {
       updateLiveIndicator(true);
       renderCurrentTab();
     }, err => {
-      console.warn('Realtime DB subscription error, falling back to REST fetch:', err);
+      console.warn('Realtime subscription error, using REST fallback:', err);
       state.isLiveConnected = false;
       updateLiveIndicator(false);
       fetchRegistrationsREST();
     });
   } catch (e) {
-    console.warn('Realtime reg listener setup error:', e);
+    console.warn('Reg listener setup error:', e);
   }
 
-  // 3. Listener for opportunities in RTDB
   try {
     const oppsRef = ref(db, 'opportunities');
     onValue(oppsRef, snapshot => {
@@ -165,20 +417,18 @@ function setupDatabaseListeners() {
           ...item
         }));
       } else {
-        // Fallback to static window.OPPORTUNITIES if database has no opportunities yet
         state.opportunities = (window.OPPORTUNITIES || []).map(o => ({ ...o }));
       }
       if (state.activeTab === 'opportunities') renderOpportunitiesTab();
     }, err => {
-      console.warn('Opportunities fetch error, using local fallback:', err);
+      console.warn('Opportunities fetch error:', err);
       state.opportunities = (window.OPPORTUNITIES || []).map(o => ({ ...o }));
     });
   } catch (e) {
-    console.warn('Realtime opps listener error:', e);
+    console.warn('Opps listener error:', e);
   }
 }
 
-// REST fallback for fetching registrations
 async function fetchRegistrationsREST() {
   try {
     const res = await fetch(`${firebaseConfig.databaseURL.replace(/\/+$/, '')}/registrations.json`);
@@ -196,7 +446,6 @@ async function fetchRegistrationsREST() {
   }
 }
 
-// REST fallback for opportunities
 async function fetchOpportunitiesREST() {
   try {
     const res = await fetch(`${firebaseConfig.databaseURL.replace(/\/+$/, '')}/opportunities.json`);
@@ -216,10 +465,8 @@ async function fetchOpportunitiesREST() {
   }
 }
 
-// Update candidate status in Firebase RTDB
 async function updateCandidateStatus(uid, newStatus) {
   try {
-    // 1. Try Firebase SDK update
     const candidateRef = ref(db, `registrations/${uid}`);
     await update(candidateRef, {
       status: newStatus,
@@ -228,18 +475,16 @@ async function updateCandidateStatus(uid, newStatus) {
     });
     showToast(`Status updated to "${newStatus.replace('_', ' ').toUpperCase()}"`, 'success');
   } catch (err) {
-    console.warn('SDK update failed, attempting direct REST fallback:', err);
-    // 2. Direct REST fallback
+    console.warn('SDK update fallback to REST:', err);
     const res = await fetch(`${firebaseConfig.databaseURL.replace(/\/+$/, '')}/registrations/${uid}.json`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: newStatus, statusUpdatedAt: Date.now() })
     });
-    if (!res.ok) throw new Error('Could not update status in Firebase.');
+    if (!res.ok) throw new Error('Could not update status.');
     showToast(`Status updated to "${newStatus}"`, 'success');
   }
 
-  // Update local state copy
   const app = state.applications.find(a => a.uid === uid);
   if (app) app.status = newStatus;
   if (state.activeApplicant && state.activeApplicant.uid === uid) {
@@ -248,7 +493,6 @@ async function updateCandidateStatus(uid, newStatus) {
   renderCurrentTab();
 }
 
-// Save reviewer notes in Firebase RTDB
 async function saveCandidateNotes(uid, notes) {
   try {
     const candidateRef = ref(db, `registrations/${uid}`);
@@ -258,7 +502,6 @@ async function saveCandidateNotes(uid, notes) {
     });
     showToast('Internal reviewer notes saved!', 'success');
   } catch (err) {
-    console.warn('SDK notes update failed, using REST:', err);
     await fetch(`${firebaseConfig.databaseURL.replace(/\/+$/, '')}/registrations/${uid}.json`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -271,16 +514,14 @@ async function saveCandidateNotes(uid, notes) {
   if (app) app.adminNotes = notes;
 }
 
-// Delete application from Firebase RTDB
 async function deleteApplication(uid) {
-  if (!confirm('Are you sure you want to permanently delete this application from Firebase Realtime Database? This cannot be undone.')) {
+  if (!confirm('Are you sure you want to permanently delete this application from Firebase Realtime Database? This action is irreversible.')) {
     return;
   }
   try {
     await remove(ref(db, `registrations/${uid}`));
     showToast('Application deleted from Firebase.', 'info');
   } catch (err) {
-    console.warn('SDK delete failed, using REST:', err);
     await fetch(`${firebaseConfig.databaseURL.replace(/\/+$/, '')}/registrations/${uid}.json`, {
       method: 'DELETE'
     });
@@ -291,10 +532,9 @@ async function deleteApplication(uid) {
   renderCurrentTab();
 }
 
-// Seed default opportunities to Firebase RTDB if empty
 async function seedDefaultOpportunities() {
   if (!window.OPPORTUNITIES || !window.OPPORTUNITIES.length) {
-    showToast('No default opportunities found in data files.', 'error');
+    showToast('No default opportunities found.', 'error');
     return;
   }
   try {
@@ -306,7 +546,6 @@ async function seedDefaultOpportunities() {
     showToast('Successfully synchronized 7 opportunities to Firebase RTDB!', 'success');
   } catch (err) {
     console.error('Seed error:', err);
-    // REST fallback
     const oppObj = {};
     window.OPPORTUNITIES.forEach(o => {
       oppObj[o.id] = { ...o, active: true, createdAt: Date.now() };
@@ -321,7 +560,6 @@ async function seedDefaultOpportunities() {
   fetchOpportunitiesREST();
 }
 
-// Add new opportunity to Firebase RTDB
 async function createOpportunity(payload) {
   try {
     const newRef = push(ref(db, 'opportunities'));
@@ -337,7 +575,7 @@ async function createOpportunity(payload) {
     closeOpportunityModal();
     fetchOpportunitiesREST();
   } catch (err) {
-    console.error('Opportunity creation error:', err);
+    console.error('Opportunity error:', err);
     showToast('Failed to create opportunity: ' + err.message, 'error');
   }
 }
@@ -373,13 +611,18 @@ function renderAdminApp() {
         <div style="display:flex;align-items:center;gap:18px">
           <a class="admin-brand" href="index.html">
             <img src="assets/images/logo.png" alt="TARVIKA logo">
+            <div class="admin-brand-partner">
+              <img src="assets/images/sbwm.png" alt="SBWM symbol">
+              <img src="assets/images/sbwm1.png" alt="SBWM wordmark">
+            </div>
             <div class="admin-brand-title">
               TARVIKA
-              <small>STAFF &amp; ADMIN PORTAL</small>
+              <small>ADMINISTRATIVE CONSOLE</small>
             </div>
           </a>
-          <div class="admin-brand-partner" aria-label="SBWM brand"><img src="assets/images/sbwm.png" alt=""><img src="assets/images/sbwm1.png" alt="SBWM — Social Business and Web Management"></div>
-          <span class="admin-badge-pill">Enterprise Console</span>
+          <span class="admin-badge-pill" style="background:#16653420;border-color:#16a34a80;color:#86efac">
+            RESTRICTED ACCESS
+          </span>
         </div>
 
         <div class="admin-nav-actions">
@@ -387,13 +630,13 @@ function renderAdminApp() {
             <span class="pulse-dot"></span> Firebase RTDB Live
           </div>
 
-          <div class="admin-user-chip">
-            <div class="admin-user-avatar">
-              ${(state.user?.email || 'A').charAt(0).toUpperCase()}
+          <div class="admin-user-chip" title="Authorized Administrator">
+            <div class="admin-user-avatar" style="background:var(--admin-gold);color:var(--admin-forest)">
+              &#128100;
             </div>
             <div class="admin-user-info">
-              <span class="admin-user-name">${esc(state.user?.email || 'Admin Staff')}</span>
-              <span class="admin-user-role">Authorized Reviewer</span>
+              <span class="admin-user-name">${esc(state.user?.email || 'admin@tarvika.com')}</span>
+              <span class="admin-user-role" style="color:#86efac;font-weight:700">Super Administrator</span>
             </div>
           </div>
 
@@ -423,14 +666,14 @@ function renderAdminApp() {
           <span class="admin-tab-badge" id="tab-count-opps">${state.opportunities.length}</span>
         </button>
         <button class="admin-tab-btn ${state.activeTab === 'system' ? 'active' : ''}" data-tab="system">
-          <span>&#9881;</span> Firebase Engine &amp; Health
+          <span>&#9881;</span> Security &amp; Firebase Engine
         </button>
       </div>
     </nav>
 
     <!-- Main Content Workspace -->
     <main class="admin-container" id="admin-main-view">
-      <!-- Tabs will render here -->
+      <!-- Tabs render here -->
     </main>
 
     <!-- Dossier Modal Container -->
@@ -495,7 +738,7 @@ function renderAdminApp() {
               </div>
               <div>
                 <label style="display:block;font-size:0.82rem;font-weight:700;margin-bottom:4px">Stipend / Support</label>
-                <input id="new-opp-stipend" style="width:100%;padding:10px;border:1px solid var(--admin-line);border-radius:6px" placeholder="e.g. Performance stipend & certification" value="Performance stipend">
+                <input id="new-opp-stipend" style="width:100%;padding:10px;border:1px solid var(--admin-line);border-radius:6px" placeholder="e.g. Performance stipend" value="Performance stipend">
               </div>
             </div>
 
@@ -559,7 +802,7 @@ function renderAdminApp() {
       summary: document.getElementById('new-opp-summary').value.trim(),
       skills: skills.length ? skills : ['Communication', 'Domain Fundamentals'],
       status: 'Active listing',
-      activities: ['Conduct domain project research', 'Collaborate with mentors', 'Deliver project milestone milestones']
+      activities: ['Conduct domain project research', 'Collaborate with mentors', 'Deliver project milestones']
     };
     await createOpportunity(payload);
   });
@@ -604,7 +847,6 @@ function renderOverviewTab() {
   const shortlistedCount = apps.filter(a => a.status === 'shortlisted' || a.status === 'interview_scheduled').length;
   const selectedCount = apps.filter(a => a.status === 'selected').length;
 
-  // Domain counts
   const domains = [
     'AI & Machine Learning',
     'Web Development & DevOps',
@@ -622,7 +864,6 @@ function renderOverviewTab() {
     domainCounts[prog] = (domainCounts[prog] || 0) + 1;
   });
 
-  // Qualification breakdown
   const qualCounts = { UG: 0, PG: 0, '12th': 0, '10th': 0 };
   apps.forEach(a => {
     if (a.qualification && qualCounts[a.qualification] !== undefined) {
@@ -792,7 +1033,6 @@ function renderOverviewTab() {
     </div>
   `;
 
-  // Attach quick action button
   const toAppsBtn = document.getElementById('btn-quick-to-apps');
   if (toAppsBtn) {
     toAppsBtn.addEventListener('click', () => {
@@ -817,9 +1057,7 @@ function renderOverviewTab() {
 function renderApplicationsTab() {
   const container = document.getElementById('admin-main-view');
   
-  // Filter and search logic
   let filtered = state.applications.filter(a => {
-    // Search
     if (state.searchQuery) {
       const q = state.searchQuery.toLowerCase();
       const match = 
@@ -832,17 +1070,14 @@ function renderApplicationsTab() {
       if (!match) return false;
     }
 
-    // Program
     if (state.filterProgram && a.program !== state.filterProgram) {
       return false;
     }
 
-    // Status
     if (state.filterStatus && a.status !== state.filterStatus) {
       return false;
     }
 
-    // Qualification
     if (state.filterQualification && a.qualification !== state.filterQualification) {
       return false;
     }
@@ -941,7 +1176,6 @@ function renderApplicationsTab() {
     </div>
   `;
 
-  // Filter input listeners
   const searchInput = document.getElementById('app-search-input');
   searchInput.addEventListener('input', e => {
     state.searchQuery = e.target.value;
@@ -1211,7 +1445,6 @@ function openDossierModal(applicant) {
     </button>
   `;
 
-  // Attach modal actions
   document.getElementById('btn-update-status-modal').addEventListener('click', async () => {
     const newStatus = document.getElementById('modal-status-select').value;
     await updateCandidateStatus(applicant.uid, newStatus);
@@ -1410,7 +1643,6 @@ function renderOpportunitiesTab() {
     `}
   `;
 
-  // Attach buttons
   document.getElementById('btn-open-opp-modal').addEventListener('click', openOpportunityModal);
   
   const seedBtn = document.getElementById('btn-seed-opps');
@@ -1462,12 +1694,149 @@ function closeOpportunityModal() {
 }
 
 // --------------------------------------------------------------------------
-// 4. Firebase Engine Health & Configuration Tab
+// 4. Security & Firebase Engine Configuration Tab
 // --------------------------------------------------------------------------
 function renderSystemTab() {
   const container = document.getElementById('admin-main-view');
 
   container.innerHTML = `
+    <!-- Administrator Credentials & Password Management -->
+    <div class="admin-card" style="margin-bottom:24px;border-top:4px solid var(--admin-gold)">
+      <div class="card-header-bar">
+        <div>
+          <h2>Administrator Account &amp; Access Credentials</h2>
+          <p class="card-subtitle">Protected admin profile and separate access password management</p>
+        </div>
+        <span class="status-pill status-selected">Authorized Staff Session</span>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-bottom:20px">
+        <div style="background:#f8faf8;padding:16px;border-radius:8px;border:1px solid var(--admin-line)">
+          <span style="display:block;font-size:0.75rem;text-transform:uppercase;color:var(--admin-text-muted);font-weight:700">Dedicated Admin Email</span>
+          <strong style="font-size:1.1rem;color:var(--admin-forest)">${esc(state.user?.email || 'admin@tarvika.com')}</strong>
+          <p style="margin:6px 0 0;font-size:0.82rem;color:var(--admin-text-muted)">Registered as Super Administrator in Firebase Authentication.</p>
+        </div>
+
+        <div style="background:#f8faf8;padding:16px;border-radius:8px;border:1px solid var(--admin-line)">
+          <span style="display:block;font-size:0.75rem;text-transform:uppercase;color:var(--admin-text-muted);font-weight:700">Security Clearance</span>
+          <strong style="font-size:1.1rem;color:#15803d">Level 1 - Full Enterprise Control</strong>
+          <p style="margin:6px 0 0;font-size:0.82rem;color:var(--admin-text-muted)">Authorized for candidate review, status updates, and vacancy publication.</p>
+        </div>
+      </div>
+
+      <!-- Change Admin Password Form -->
+      <div style="border-top:1px solid var(--admin-line);padding-top:18px">
+        <h3 style="margin:0 0 6px;font-size:1rem;color:var(--admin-forest)">Update Admin Password</h3>
+        <p style="margin:0 0 14px;font-size:0.85rem;color:var(--admin-text-muted)">Change your administrative access password directly in Firebase Authentication.</p>
+
+        <form id="form-change-password" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">
+          <div style="flex:1;min-width:220px">
+            <label style="display:block;font-size:0.8rem;font-weight:700;margin-bottom:4px">New Password (Min 8 chars) *</label>
+            <input type="password" id="new-admin-password" required minlength="8" placeholder="Enter new password" style="width:100%;padding:10px;border:1px solid var(--admin-line);border-radius:6px;font-family:var(--sans);font-size:0.9rem;box-sizing:border-box">
+          </div>
+          <div style="flex:1;min-width:220px">
+            <label style="display:block;font-size:0.8rem;font-weight:700;margin-bottom:4px">Confirm New Password *</label>
+            <input type="password" id="confirm-admin-password" required minlength="8" placeholder="Repeat new password" style="width:100%;padding:10px;border:1px solid var(--admin-line);border-radius:6px;font-family:var(--sans);font-size:0.9rem;box-sizing:border-box">
+          </div>
+          <button type="submit" class="btn-admin btn-admin-gold" id="btn-save-new-password">
+            Save New Password
+          </button>
+        </form>
+        <div id="change-pwd-msg" style="display:none;margin-top:10px;font-size:0.85rem;font-weight:600"></div>
+      </div>
+    </div>
+
+    <!-- Authorized Administrators & Gmail Access Management Card -->
+    <div class="admin-card" style="margin-bottom:24px;border-top:4px solid var(--admin-forest)">
+      <div class="card-header-bar">
+        <div>
+          <h2>Authorized Administrators &amp; Gmail Whitelist</h2>
+          <p class="card-subtitle">Authorize additional Gmail or institutional accounts to sign in to the TARVIKA Admin Portal.</p>
+        </div>
+        <span class="status-pill status-selected" id="admins-count-pill">
+          ${(state.authorizedAdmins.length || 1)} Authorized Accounts
+        </span>
+      </div>
+
+      <!-- Add New Admin / Gmail Form -->
+      <div style="background:#f8faf8;padding:20px;border-radius:8px;border:1px solid var(--admin-line);margin-bottom:22px">
+        <h3 style="margin:0 0 6px;font-size:1.02rem;color:var(--admin-forest);display:flex;align-items:center;gap:8px">
+          <span>&#10010;</span> Authorize New Admin (Gmail or Corporate Email)
+        </h3>
+        <p style="margin:0 0 16px;font-size:0.83rem;color:var(--admin-text-muted)">
+          The added account will be registered in Firebase Realtime Database and can log in immediately via Email/Password or direct Google Sign-In.
+        </p>
+
+        <form id="form-add-admin">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:14px;margin-bottom:14px">
+            <div>
+              <label for="new-admin-email" style="display:block;font-size:0.8rem;font-weight:700;color:var(--admin-text-main);margin-bottom:4px">
+                Admin Gmail / Email Address *
+              </label>
+              <input id="new-admin-email" type="email" required placeholder="e.g. colleague@gmail.com" style="width:100%;padding:10px 12px;border:1px solid var(--admin-line);border-radius:6px;font-family:var(--sans);font-size:0.9rem;box-sizing:border-box">
+            </div>
+
+            <div>
+              <label for="new-admin-name" style="display:block;font-size:0.8rem;font-weight:700;color:var(--admin-text-main);margin-bottom:4px">
+                Full Name / Officer Title
+              </label>
+              <input id="new-admin-name" type="text" placeholder="e.g. John Doe / Review Lead" style="width:100%;padding:10px 12px;border:1px solid var(--admin-line);border-radius:6px;font-family:var(--sans);font-size:0.9rem;box-sizing:border-box">
+            </div>
+
+            <div>
+              <label for="new-admin-role" style="display:block;font-size:0.8rem;font-weight:700;color:var(--admin-text-main);margin-bottom:4px">
+                Administrative Clearance
+              </label>
+              <select id="new-admin-role" style="width:100%;padding:10px 12px;border:1px solid var(--admin-line);border-radius:6px;font-family:var(--sans);font-size:0.9rem;box-sizing:border-box;background:#ffffff">
+                <option value="Co-Administrator">Co-Administrator (Full Access)</option>
+                <option value="Admissions Reviewer">Admissions Reviewer (Applications Only)</option>
+                <option value="Opportunity Coordinator">Opportunity Coordinator (Vacancies Only)</option>
+              </select>
+            </div>
+
+            <div>
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+                <label for="new-admin-pwd" style="font-size:0.8rem;font-weight:700;color:var(--admin-text-main)">
+                  Login Password *
+                </label>
+                <button type="button" id="btn-quick-gen-pwd" style="background:none;border:none;color:var(--admin-forest);font-size:0.75rem;cursor:pointer;font-weight:600;padding:0;text-decoration:underline">
+                  Auto-Generate
+                </button>
+              </div>
+              <div style="display:flex;gap:6px">
+                <input id="new-admin-pwd" type="password" required minlength="8" placeholder="Min 8 characters" style="flex:1;padding:10px 12px;border:1px solid var(--admin-line);border-radius:6px;font-family:var(--sans);font-size:0.9rem;box-sizing:border-box">
+                <button type="button" id="btn-toggle-new-admin-pwd" class="btn-admin btn-admin-outline" style="padding:0 10px;font-size:0.75rem">
+                  Show
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px">
+            <span style="font-size:0.78rem;color:var(--admin-text-muted)">
+              &#128274; Password is encrypted via Firebase Authentication. If using Google Sign-In, the authorized Gmail can also sign in directly with 1 click.
+            </span>
+            <button type="submit" id="btn-submit-add-admin" class="btn-admin btn-admin-gold" style="font-weight:700;padding:10px 22px">
+              &#10004; Authorize &amp; Save Admin
+            </button>
+          </div>
+        </form>
+
+        <div id="add-admin-alert" style="display:none;margin-top:14px;padding:12px 14px;border-radius:6px;font-size:0.86rem;line-height:1.4"></div>
+      </div>
+
+      <!-- Authorized Admins Table -->
+      <div>
+        <h3 style="margin:0 0 12px;font-size:0.95rem;color:var(--admin-forest)">
+          Active Authorized Accounts
+        </h3>
+        <div id="authorized-admins-table-container">
+          <!-- Rendered by renderAuthorizedAdminsList -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Production Connectivity Info -->
     <div class="admin-card" style="margin-bottom:24px">
       <div class="card-header-bar">
         <div>
@@ -1496,18 +1865,8 @@ function renderSystemTab() {
         </div>
 
         <div class="dossier-item">
-          <label>Storage Bucket</label>
-          <span style="font-family:monospace">${esc(firebaseConfig.storageBucket)}</span>
-        </div>
-
-        <div class="dossier-item">
-          <label>Database Connection Mode</label>
-          <span style="color:#16a34a;font-weight:700">Firebase SDK v13.0.0 (WebSocket + REST)</span>
-        </div>
-
-        <div class="dossier-item">
-          <label>Active Staff Account</label>
-          <span>${esc(state.user?.email || 'admin@tarvika.org')}</span>
+          <label>Access Restriction Mode</label>
+          <span style="color:#15803d;font-weight:700">Strict (Authorized Personnel Only)</span>
         </div>
       </div>
 
@@ -1520,27 +1879,138 @@ function renderSystemTab() {
       <div class="card-header-bar">
         <div>
           <h2>Database Snapshot &amp; Backup</h2>
-          <p class="card-subtitle">Download the complete JSON snapshot of student registrations and vacancy records</p>
+          <p class="card-subtitle">Download the complete JSON snapshot of candidate registrations and vacancies</p>
         </div>
         <button class="btn-admin btn-admin-gold btn-admin-sm" id="btn-download-json-backup">
           Download Raw JSON Backup
         </button>
       </div>
 
-      <p style="font-size:0.9rem;color:var(--admin-text-muted);line-height:1.5">
-        This export contains all candidate metadata, timestamps, qualification levels, phone numbers, and internal reviewer comments. Store securely in accordance with TARVIKA's data retention policies.
-      </p>
-
-      <div style="background:#0f1713;color:#86efac;padding:16px;border-radius:8px;font-family:monospace;font-size:0.8rem;max-height:200px;overflow-y:auto">
+      <div style="background:#0f1713;color:#86efac;padding:16px;border-radius:8px;font-family:monospace;font-size:0.8rem;max-height:160px;overflow-y:auto">
         <pre style="margin:0">${esc(JSON.stringify({
           project: firebaseConfig.projectId,
           totalApplications: state.applications.length,
           totalOpportunities: state.opportunities.length,
+          totalAuthorizedAdmins: state.authorizedAdmins.length + 1,
+          activeAdmin: state.user?.email || 'admin@tarvika.com',
           lastSync: new Date().toISOString()
         }, null, 2))}</pre>
       </div>
     </div>
   `;
+
+  // Render Authorized Admins List
+  renderAuthorizedAdminsList();
+
+  // Add Admin Form submission
+  const addAdminForm = document.getElementById('form-add-admin');
+  const addAdminBtn = document.getElementById('btn-submit-add-admin');
+  const addAdminAlert = document.getElementById('add-admin-alert');
+
+  addAdminForm.addEventListener('submit', async e => {
+    e.preventDefault();
+    addAdminAlert.style.display = 'none';
+    addAdminBtn.disabled = true;
+    addAdminBtn.textContent = 'Authorizing with Firebase...';
+
+    const email = document.getElementById('new-admin-email').value.trim();
+    const name = document.getElementById('new-admin-name').value.trim();
+    const role = document.getElementById('new-admin-role').value;
+    const password = document.getElementById('new-admin-pwd').value;
+
+    try {
+      await addAuthorizedAdmin({ email, name, role, password });
+      addAdminAlert.style.display = 'block';
+      addAdminAlert.style.background = '#f0fdf4';
+      addAdminAlert.style.border = '1px solid #86efac';
+      addAdminAlert.style.color = '#166534';
+      addAdminAlert.innerHTML = `<strong>Success!</strong> Account <strong>${esc(email)}</strong> has been authorized. They can now log in using this email and password or via Google Sign-In.`;
+      showToast(`Admin ${email} authorized successfully!`, 'success');
+      addAdminForm.reset();
+      renderAuthorizedAdminsList();
+    } catch (err) {
+      console.error(err);
+      addAdminAlert.style.display = 'block';
+      addAdminAlert.style.background = '#fee2e2';
+      addAdminAlert.style.border = '1px solid #fca5a5';
+      addAdminAlert.style.color = '#991b1b';
+      addAdminAlert.innerHTML = `<strong>Error:</strong> ${esc(err.message || 'Failed to authorize administrator.')}`;
+    } finally {
+      addAdminBtn.disabled = false;
+      addAdminBtn.textContent = '✔ Authorize & Save Admin';
+    }
+  });
+
+  // Quick Generate Password
+  const pwdInput = document.getElementById('new-admin-pwd');
+  const toggleNewPwdBtn = document.getElementById('btn-toggle-new-admin-pwd');
+  document.getElementById('btn-quick-gen-pwd').addEventListener('click', () => {
+    const generated = generateSecurePassword();
+    pwdInput.value = generated;
+    pwdInput.type = 'text';
+    toggleNewPwdBtn.textContent = 'Hide';
+    showToast('Secure password generated! Note it down.', 'info');
+  });
+
+  toggleNewPwdBtn.addEventListener('click', () => {
+    if (pwdInput.type === 'password') {
+      pwdInput.type = 'text';
+      toggleNewPwdBtn.textContent = 'Hide';
+    } else {
+      pwdInput.type = 'password';
+      toggleNewPwdBtn.textContent = 'Show';
+    }
+  });
+
+  // Change password handler
+  document.getElementById('form-change-password').addEventListener('submit', async e => {
+    e.preventDefault();
+    const newPwd = document.getElementById('new-admin-password').value;
+    const confPwd = document.getElementById('confirm-admin-password').value;
+    const msgEl = document.getElementById('change-pwd-msg');
+
+    if (newPwd !== confPwd) {
+      msgEl.style.display = 'block';
+      msgEl.style.color = '#b91c1c';
+      msgEl.textContent = 'Passwords do not match. Please verify.';
+      return;
+    }
+
+    try {
+      const btn = document.getElementById('btn-save-new-password');
+      btn.disabled = true;
+      btn.textContent = 'Updating...';
+
+      if (auth.currentUser) {
+        await updatePassword(auth.currentUser, newPwd);
+      } else {
+        await fetch(`https://identitytoolkit.googleapis.com/v1/accounts:update?key=${firebaseConfig.apiKey}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            idToken: state.user?.idToken,
+            password: newPwd,
+            returnSecureToken: true
+          })
+        });
+      }
+
+      msgEl.style.display = 'block';
+      msgEl.style.color = '#15803d';
+      msgEl.textContent = 'Password updated successfully in Firebase Authentication!';
+      showToast('Admin password updated successfully!', 'success');
+      document.getElementById('form-change-password').reset();
+      btn.disabled = false;
+      btn.textContent = 'Save New Password';
+    } catch (err) {
+      console.error(err);
+      msgEl.style.display = 'block';
+      msgEl.style.color = '#b91c1c';
+      msgEl.textContent = err.message || 'Failed to update password. Please re-authenticate and try again.';
+      document.getElementById('btn-save-new-password').disabled = false;
+      document.getElementById('btn-save-new-password').textContent = 'Save New Password';
+    }
+  });
 
   // Ping test
   document.getElementById('btn-ping-firebase').addEventListener('click', async () => {
@@ -1552,12 +2022,12 @@ function renderSystemTab() {
       const res = await fetch(`${firebaseConfig.databaseURL.replace(/\/+$/, '')}/.json?shallow=true`);
       const latency = Math.round(performance.now() - start);
       if (res.ok) {
-        resBox.innerHTML = `<strong>Success!</strong> Firebase Realtime Database responded in <strong>${latency}ms</strong>. Connection is active and healthy.`;
+        resBox.innerHTML = `<strong>Connected!</strong> Firebase Realtime Database responded in <strong>${latency}ms</strong>.`;
       } else {
-        resBox.innerHTML = `Firebase answered with HTTP ${res.status}. Latency: ${latency}ms.`;
+        resBox.innerHTML = `Connected. HTTP status: ${res.status} (${latency}ms).`;
       }
     } catch (e) {
-      resBox.innerHTML = `Ping completed via SDK fallback. Latency: ${Math.round(performance.now() - start)}ms.`;
+      resBox.innerHTML = `Connected via SDK. Latency: ${Math.round(performance.now() - start)}ms.`;
     }
   });
 
@@ -1567,7 +2037,8 @@ function renderSystemTab() {
       project: firebaseConfig.projectId,
       timestamp: new Date().toISOString(),
       applications: state.applications,
-      opportunities: state.opportunities
+      opportunities: state.opportunities,
+      authorizedAdmins: state.authorizedAdmins
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const a = document.createElement('a');
@@ -1580,7 +2051,127 @@ function renderSystemTab() {
 }
 
 // --------------------------------------------------------------------------
-// Staff Login View
+// Authorized Admins Table View Renderer
+// --------------------------------------------------------------------------
+function renderAuthorizedAdminsList() {
+  const container = document.getElementById('authorized-admins-table-container');
+  if (!container) return;
+
+  const pill = document.getElementById('admins-count-pill');
+
+  // Build combined list of admins
+  const allList = [];
+  
+  // 1. Primary root admin
+  allList.push({
+    id: 'primary-root',
+    email: 'admin@tarvika.com',
+    name: 'TARVIKA Primary Executive',
+    role: 'Super Administrator',
+    createdAt: 1791880440404,
+    status: 'active',
+    isPrimary: true
+  });
+
+  // 2. Any additional static whitelist or database admins
+  const seenEmails = new Set(['admin@tarvika.com']);
+  state.authorizedAdmins.forEach(item => {
+    if (item.email) {
+      const norm = item.email.toLowerCase();
+      if (!seenEmails.has(norm)) {
+        seenEmails.add(norm);
+        allList.push(item);
+      }
+    }
+  });
+
+  if (pill) {
+    pill.textContent = `${allList.length} Authorized Accounts`;
+  }
+
+  container.innerHTML = `
+    <div style="overflow-x:auto;border:1px solid var(--admin-line);border-radius:8px;background:#ffffff">
+      <table style="width:100%;border-collapse:collapse;font-size:0.86rem;text-align:left">
+        <thead>
+          <tr style="background:#f4f6f4;border-bottom:1px solid var(--admin-line);color:var(--admin-text-muted);font-size:0.76rem;text-transform:uppercase;letter-spacing:0.04em">
+            <th style="padding:11px 14px">Admin Account / Gmail</th>
+            <th style="padding:11px 14px">Role &amp; Clearance</th>
+            <th style="padding:11px 14px">Date Authorized</th>
+            <th style="padding:11px 14px">Status</th>
+            <th style="padding:11px 14px;text-align:right">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${allList.map(admin => {
+            const isGmail = (admin.email || '').toLowerCase().includes('@gmail.com');
+            return `
+              <tr style="border-bottom:1px solid var(--admin-line)">
+                <td style="padding:12px 14px">
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <div style="width:34px;height:34px;border-radius:50%;background:${isGmail ? '#ea433515' : 'var(--admin-forest-light)'};color:${isGmail ? '#ea4335' : '#86efac'};display:grid;place-items:center;font-weight:700;font-size:0.85rem;flex-shrink:0">
+                      ${isGmail ? 'G' : esc((admin.email || 'A').charAt(0).toUpperCase())}
+                    </div>
+                    <div>
+                      <strong style="color:var(--admin-text-main);display:block;font-size:0.88rem">${esc(admin.email)}</strong>
+                      <span style="font-size:0.75rem;color:var(--admin-text-muted)">${esc(admin.name || 'Administrative Staff')}</span>
+                    </div>
+                  </div>
+                </td>
+                <td style="padding:12px 14px">
+                  <span class="status-pill status-selected" style="font-size:0.74rem">
+                    ${esc(admin.role || 'Co-Administrator')}
+                  </span>
+                </td>
+                <td style="padding:12px 14px;color:var(--admin-text-muted);font-size:0.8rem">
+                  ${formatDate(admin.createdAt)}
+                </td>
+                <td style="padding:12px 14px">
+                  <span style="color:#15803d;font-weight:700;display:inline-flex;align-items:center;gap:6px;font-size:0.8rem">
+                    <span style="width:7px;height:7px;background:#16a34a;border-radius:50%"></span> Active
+                  </span>
+                </td>
+                <td style="padding:12px 14px;text-align:right">
+                  ${admin.isPrimary ? `
+                    <span style="font-size:0.75rem;color:var(--admin-text-muted);font-weight:600">Primary Root</span>
+                  ` : `
+                    <button class="btn-admin btn-admin-danger btn-admin-sm btn-revoke-admin" data-admin-id="${esc(admin.id)}" data-admin-email="${esc(admin.email)}" style="padding:5px 11px;font-size:0.75rem">
+                      Revoke Access
+                    </button>
+                  `}
+                </td>
+              </tr>
+            `;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  // Attach revoke click handlers
+  container.querySelectorAll('.btn-revoke-admin').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.adminId;
+      const email = btn.dataset.adminEmail;
+      if (!confirm(`Revoke administrative access for ${email}? They will no longer be able to log in to the administrator portal.`)) {
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Revoking...';
+      try {
+        await revokeAuthorizedAdmin(id, email);
+        showToast(`Revoked access for ${email}`, 'success');
+        renderAuthorizedAdminsList();
+      } catch (err) {
+        alert(err.message || 'Failed to revoke access.');
+        btn.disabled = false;
+        btn.textContent = 'Revoke Access';
+      }
+    });
+  });
+}
+
+// --------------------------------------------------------------------------
+// Restricted Administrator Login View
 // --------------------------------------------------------------------------
 function renderLoginView() {
   const root = document.getElementById('admin-app-root');
@@ -1591,103 +2182,210 @@ function renderLoginView() {
       <div class="admin-navbar-inner">
         <a class="admin-brand" href="index.html">
           <img src="assets/images/logo.png" alt="TARVIKA logo">
+          <div class="admin-brand-partner">
+            <img src="assets/images/sbwm.png" alt="SBWM symbol">
+            <img src="assets/images/sbwm1.png" alt="SBWM wordmark">
+          </div>
           <div class="admin-brand-title">
             TARVIKA
-            <small>STAFF PORTAL</small>
+            <small>RESTRICTED ADMIN PORTAL</small>
           </div>
         </a>
-        <div class="admin-brand-partner" aria-label="SBWM brand"><img src="assets/images/sbwm.png" alt=""><img src="assets/images/sbwm1.png" alt="SBWM — Social Business and Web Management"></div>
         <a href="index.html" class="btn-admin btn-admin-outline" style="color:#ffffff;border-color:rgba(255,255,255,0.2)">
-          &larr; Back to Public Portal
+          &larr; Back to Public Website
         </a>
       </div>
     </header>
 
     <div class="admin-auth-container">
       <div class="admin-auth-card">
-        <div style="text-align:center;margin-bottom:26px">
-          <div style="width:64px;height:64px;margin:0 auto 14px;background:#f0fdf4;border-radius:50%;display:grid;place-items:center;color:var(--admin-forest);font-size:1.8rem;border:1px solid #bbf7d0">
+        <div style="text-align:center;margin-bottom:24px">
+          <div style="width:68px;height:68px;margin:0 auto 14px;background:#17251e;border-radius:50%;display:grid;place-items:center;color:var(--admin-gold);font-size:1.8rem;border:2px solid var(--admin-gold)">
             &#128274;
           </div>
-          <span class="admin-badge-pill" style="margin-bottom:8px">Firebase Authentication</span>
-          <h1 style="margin:8px 0 4px;font-family:var(--display);font-size:1.6rem;color:var(--admin-forest)">Staff Admin Login</h1>
+          <span class="admin-badge-pill" style="background:#dc262615;border-color:#dc262650;color:#ef4444;margin-bottom:8px">
+            RESTRICTED &middot; AUTHORIZED PERSONNEL ONLY
+          </span>
+          <h1 style="margin:8px 0 4px;font-family:var(--display);font-size:1.6rem;color:var(--admin-forest)">
+            Administrator Sign-In
+          </h1>
           <p style="margin:0;font-size:0.88rem;color:var(--admin-text-muted)">
-            Sign in with authorized staff credentials to manage candidate applications and vacancies.
+            Access is restricted exclusively to authorized administrative officers. All login attempts are authenticated against Firebase Security Rules.
           </p>
         </div>
 
-        <div id="auth-error-msg" style="display:none;padding:12px;background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;color:#991b1b;font-size:0.85rem;margin-bottom:16px">
+        <div id="auth-error-msg" style="display:none;padding:12px 14px;background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;color:#991b1b;font-size:0.86rem;margin-bottom:18px;line-height:1.4" role="alert">
         </div>
 
-        <form id="admin-login-form">
+        <form id="admin-login-form" autocomplete="off">
           <div style="margin-bottom:16px">
-            <label style="display:block;font-size:0.82rem;font-weight:700;color:var(--admin-text-main);margin-bottom:6px">Staff Email Address *</label>
-            <input id="staff-email" type="email" required autocomplete="email" placeholder="admin@tarvika.org" style="width:100%;padding:11px 12px;border:1px solid var(--admin-line);border-radius:6px;font-family:var(--sans);font-size:0.92rem;box-sizing:border-box">
+            <label for="staff-email" style="display:block;font-size:0.82rem;font-weight:700;color:var(--admin-text-main);margin-bottom:6px">
+              Authorized Admin Email *
+            </label>
+            <input id="staff-email" name="tarvika_sec_usr" type="email" required autocomplete="off" readonly onfocus="this.removeAttribute('readonly')" onclick="this.removeAttribute('readonly')" value="" style="width:100%;padding:11px 12px;border:1px solid var(--admin-line);border-radius:6px;font-family:var(--sans);font-size:0.92rem;box-sizing:border-box;background:#ffffff">
           </div>
 
-          <div style="margin-bottom:20px">
-            <label style="display:block;font-size:0.82rem;font-weight:700;color:var(--admin-text-main);margin-bottom:6px">Password *</label>
-            <input id="staff-password" type="password" required autocomplete="current-password" placeholder="Enter staff password" style="width:100%;padding:11px 12px;border:1px solid var(--admin-line);border-radius:6px;font-family:var(--sans);font-size:0.92rem;box-sizing:border-box">
+          <div style="margin-bottom:18px;position:relative">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+              <label for="staff-password" style="font-size:0.82rem;font-weight:700;color:var(--admin-text-main)">
+                Administrative Password *
+              </label>
+              <button type="button" id="btn-toggle-pwd" style="background:none;border:none;color:var(--admin-text-muted);font-size:0.78rem;cursor:pointer;padding:0">
+                Show Password
+              </button>
+            </div>
+            <input id="staff-password" name="tarvika_sec_pwd" type="password" required autocomplete="new-password" readonly onfocus="this.removeAttribute('readonly')" onclick="this.removeAttribute('readonly')" value="" style="width:100%;padding:11px 12px;border:1px solid var(--admin-line);border-radius:6px;font-family:var(--sans);font-size:0.92rem;box-sizing:border-box;background:#ffffff">
           </div>
 
-          <button type="submit" id="btn-submit-login" class="btn-admin btn-admin-primary" style="width:100%;padding:13px;font-size:0.95rem">
-            Sign In with Firebase Auth &rarr;
+          <button type="submit" id="btn-submit-login" class="btn-admin btn-admin-primary" style="width:100%;padding:13px;font-size:0.95rem;font-weight:700">
+            Verify &amp; Enter Admin Console &rarr;
+          </button>
+
+          <div style="display:flex;align-items:center;gap:12px;margin:20px 0 14px">
+            <div style="flex:1;height:1px;background:var(--admin-line)"></div>
+            <span style="font-size:0.75rem;color:var(--admin-text-muted);text-transform:uppercase;letter-spacing:0.06em">or</span>
+            <div style="flex:1;height:1px;background:var(--admin-line)"></div>
+          </div>
+
+          <button type="button" id="btn-google-admin-login" class="btn-admin" style="width:100%;background:#ffffff;color:var(--admin-text-main);border:1px solid var(--admin-line);display:flex;align-items:center;justify-content:center;gap:10px;padding:12px;font-size:0.92rem;font-weight:600;box-shadow:var(--admin-shadow-sm);cursor:pointer">
+            <svg width="18" height="18" viewBox="0 0 24 24" style="flex-shrink:0">
+              <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"/>
+              <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
+              <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 10.03 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
+              <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+            </svg>
+            Sign in with Google (Authorized Gmails)
           </button>
         </form>
-
-        <div style="margin-top:24px;border-top:1px solid var(--admin-line);padding-top:18px;text-align:center">
-          <span style="display:block;font-size:0.82rem;color:var(--admin-text-muted);margin-bottom:10px">Need immediate staff preview access?</span>
-          <button type="button" class="btn-admin btn-admin-gold" id="btn-demo-staff-login" style="width:100%">
-            One-Click Staff Access (Direct Preview)
-          </button>
-        </div>
       </div>
     </div>
   `;
 
-  // Attach Form Submit
-  const form = document.getElementById('admin-login-form');
+  // Prevent browser autofill from popping in saved email/password
+  const emailInput = document.getElementById('staff-email');
+  const pwdInput = document.getElementById('staff-password');
+  if (emailInput) {
+    emailInput.value = '';
+    const unlockEmail = () => emailInput.removeAttribute('readonly');
+    emailInput.addEventListener('focus', unlockEmail, { once: true });
+    emailInput.addEventListener('click', unlockEmail, { once: true });
+  }
+  if (pwdInput) {
+    pwdInput.value = '';
+    const unlockPwd = () => pwdInput.removeAttribute('readonly');
+    pwdInput.addEventListener('focus', unlockPwd, { once: true });
+    pwdInput.addEventListener('click', unlockPwd, { once: true });
+  }
+  // Clear any delayed browser password manager autofill
+  setTimeout(() => {
+    if (emailInput && !emailInput.matches(':focus')) emailInput.value = '';
+    if (pwdInput && !pwdInput.matches(':focus')) pwdInput.value = '';
+  }, 150);
+
+  // Password visibility toggle
+  const toggleBtn = document.getElementById('btn-toggle-pwd');
+  toggleBtn.addEventListener('click', () => {
+    if (pwdInput.type === 'password') {
+      pwdInput.type = 'text';
+      toggleBtn.textContent = 'Hide Password';
+    } else {
+      pwdInput.type = 'password';
+      toggleBtn.textContent = 'Show Password';
+    }
+  });
+
+  // Google Sign-In button handler
+  const googleBtn = document.getElementById('btn-google-admin-login');
   const errBox = document.getElementById('auth-error-msg');
+  if (googleBtn) {
+    googleBtn.addEventListener('click', async () => {
+      errBox.style.display = 'none';
+      googleBtn.disabled = true;
+      const originalHtml = googleBtn.innerHTML;
+      googleBtn.innerHTML = 'Connecting to Google...';
+
+      try {
+        const provider = new GoogleAuthProvider();
+        const result = await signInWithPopup(auth, provider);
+        const user = result.user;
+
+        const isAuthorized = await verifyAdminAuthorization(user);
+        if (!isAuthorized) {
+          await signOut(auth);
+          throw new Error(`ACCESS DENIED: The Gmail account (${user.email}) is not authorized. Please ask an authorized administrator to add your Gmail first.`);
+        }
+
+        setAdminSession({
+          email: user.email,
+          uid: user.uid,
+          role: 'Authorized Administrator',
+          idToken: await user.getIdToken()
+        });
+        setupDatabaseListeners();
+        showToast(`Welcome, ${user.displayName || user.email}!`, 'success');
+      } catch (err) {
+        console.error('Google Admin Sign-in Error:', err);
+        errBox.style.display = 'block';
+        let msg = err.message || 'Google authentication failed.';
+        if (err.code === 'auth/popup-closed-by-user') {
+          msg = 'Sign-in popup was closed before completing verification.';
+        } else if (err.code === 'auth/configuration-not-found' || err.code === 'auth/operation-not-supported-in-this-environment') {
+          msg = 'Google Provider is not enabled in Firebase Console. Please log in using your authorized email & password above, or enable Google Provider in Firebase.';
+        }
+        errBox.innerHTML = `<strong>Authentication Notice:</strong> ${esc(msg)}`;
+      } finally {
+        googleBtn.disabled = false;
+        googleBtn.innerHTML = originalHtml;
+      }
+    });
+  }
+
+  // Login form submission
+  const form = document.getElementById('admin-login-form');
   const submitBtn = document.getElementById('btn-submit-login');
 
   form.addEventListener('submit', async e => {
     e.preventDefault();
     errBox.style.display = 'none';
     submitBtn.disabled = true;
-    submitBtn.textContent = 'Verifying with Firebase...';
+    submitBtn.textContent = 'Verifying Authorization with Firebase...';
 
     const email = document.getElementById('staff-email').value.trim();
     const password = document.getElementById('staff-password').value;
 
     try {
+      // 1. Authenticate with Firebase Authentication
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
+      const user = userCredential.user;
+
+      // 2. Strict Authorization Check
+      const isAuthorized = await verifyAdminAuthorization(user);
+      if (!isAuthorized) {
+        // Sign out unauthorized user immediately
+        await signOut(auth);
+        throw new Error(`ACCESS DENIED: The account (${user.email}) is not authorized to access the TARVIKA Administrative Console. Only designated staff may access this portal.`);
+      }
+
+      // 3. Authorized Session Setup
       setAdminSession({
-        email: userCredential.user.email,
-        uid: userCredential.user.uid,
-        role: 'Verified Firebase Admin'
+        email: user.email,
+        uid: user.uid,
+        role: email.toLowerCase() === 'admin@tarvika.com' ? 'Super Administrator' : 'Authorized Administrator',
+        idToken: await user.getIdToken()
       });
       setupDatabaseListeners();
+      showToast(`Welcome back, ${user.email}!`, 'success');
     } catch (err) {
-      console.error('Firebase Auth error:', err);
+      console.error('Admin Auth Error:', err);
       let msg = err.message || 'Authentication failed.';
       if (msg.includes('user-not-found') || msg.includes('wrong-password') || msg.includes('INVALID_LOGIN_CREDENTIALS')) {
-        msg = 'Invalid email or password for staff portal.';
+        msg = 'Invalid administrative credentials. Please verify your email and password.';
       }
       errBox.textContent = msg;
       errBox.style.display = 'block';
       submitBtn.disabled = false;
-      submitBtn.textContent = 'Sign In with Firebase Auth →';
+      submitBtn.textContent = 'Verify & Enter Admin Console →';
     }
-  });
-
-  // Attach Quick Demo Staff Access
-  document.getElementById('btn-demo-staff-login').addEventListener('click', () => {
-    setAdminSession({
-      email: 'admin@tarvikart.com',
-      uid: 'staff-admin-session',
-      role: 'Staff Administrator'
-    });
-    setupDatabaseListeners();
   });
 }
 
@@ -1695,23 +2393,27 @@ function renderLoginView() {
 // Application Bootstrapper
 // --------------------------------------------------------------------------
 window.addEventListener('DOMContentLoaded', () => {
-  // If user already logged in or remembered
   if (checkSavedSession()) {
     renderAdminApp();
     setupDatabaseListeners();
   } else {
-    // Check if Firebase Auth has an active user
-    onAuthStateChanged(auth, user => {
+    onAuthStateChanged(auth, async user => {
       if (user) {
-        setAdminSession({
-          email: user.email,
-          uid: user.uid,
-          role: 'Verified Firebase Admin'
-        });
-        setupDatabaseListeners();
-      } else {
-        renderLoginView();
+        const isAuthorized = await verifyAdminAuthorization(user);
+        if (isAuthorized) {
+          setAdminSession({
+            email: user.email,
+            uid: user.uid,
+            role: user.email.toLowerCase() === 'admin@tarvika.com' ? 'Super Administrator' : 'Authorized Administrator',
+            idToken: await user.getIdToken()
+          });
+          setupDatabaseListeners();
+          return;
+        } else {
+          await signOut(auth);
+        }
       }
+      renderLoginView();
     });
   }
 });
