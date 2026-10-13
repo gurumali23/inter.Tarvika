@@ -378,6 +378,7 @@ function renderAdminApp() {
               <small>STAFF &amp; ADMIN PORTAL</small>
             </div>
           </a>
+          <div class="admin-brand-partner" aria-label="SBWM brand"><img src="assets/images/sbwm.png" alt=""><img src="assets/images/sbwm1.png" alt="SBWM — Social Business and Web Management"></div>
           <span class="admin-badge-pill">Enterprise Console</span>
         </div>
 
@@ -1595,6 +1596,7 @@ function renderLoginView() {
             <small>STAFF PORTAL</small>
           </div>
         </a>
+        <div class="admin-brand-partner" aria-label="SBWM brand"><img src="assets/images/sbwm.png" alt=""><img src="assets/images/sbwm1.png" alt="SBWM — Social Business and Web Management"></div>
         <a href="index.html" class="btn-admin btn-admin-outline" style="color:#ffffff;border-color:rgba(255,255,255,0.2)">
           &larr; Back to Public Portal
         </a>

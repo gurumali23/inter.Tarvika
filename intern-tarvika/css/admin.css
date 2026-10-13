@@ -66,6 +66,29 @@ body.admin-body {
   object-fit: contain;
 }
 
+.admin-brand-partner {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding-left: 12px;
+  border-left: 1px solid rgba(255, 255, 255, 0.22);
+  flex: none;
+}
+
+.admin-brand-partner img:first-child {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+
+.admin-brand-partner img:last-child {
+  width: 112px;
+  height: auto;
+  padding: 4px 6px;
+  background: #fff;
+  border-radius: 4px;
+}
+
 .admin-brand-title {
   font-family: var(--display);
   font-weight: 800;
@@ -952,6 +975,9 @@ body.admin-body {
 }
 
 @media (max-width: 600px) {
+  .admin-brand-partner { gap: 4px; padding-left: 8px; }
+  .admin-brand-partner img:first-child { width: 26px; height: 26px; }
+  .admin-brand-partner img:last-child { width: 88px; padding: 3px 4px; }
   .dossier-grid {
     grid-template-columns: 1fr;
   }

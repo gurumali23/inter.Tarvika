@@ -1,19 +1,23 @@
 # Client handover
 
-## Implemented for review
+## Implemented in this preview
 
-- Independent responsive static portal with home, opportunity search/detail, programs, application preview, candidate dashboard boundary, about, FAQs, contact, policy drafts, staff integration boundary and 404 pages.
-- Search, category/type/work-mode filtering, sorting, clear filters, load-more control, detail-to-apply selection, accessible mobile navigation, searchable FAQ accordions, validated contact email handoff, live text counts and current-year footer.
-- Opportunity records are clearly presented as local preview samples; no live vacancy, stipend, date or eligibility claim is made.
+- Responsive static site using the TARVIKA logo already in the project, supplied forest/leaf/saffron palette, DM Sans and Manrope font stacks.
+- Homepage with catalog search, featured sample briefs, seven domain paths, application preparation, responsible-practice guidance and contact routes.
+- Searchable opportunity catalog with domain/type filters, clear action, accurate result count, empty state and sample-only detail pages.
+- Seven expanded technology domain guides with foundations, practice ideas, self-study suggestions and privacy/safety considerations.
+- Searchable and categorized FAQ accordion with keyboard-operable controls and status explanations.
+- Application preparation page that does not collect candidate details; candidate and staff pages clearly describe the missing authenticated services.
+- Readable policy drafts, verified contact details carried forward from the existing project, responsive navigation, focus indicators and reduced-motion support.
 
-## Not verified / release blockers
+## Confirmed limitations and owner decisions
 
-- Existing TARVIKA website source and actual logo were unavailable; the site could not be reached during inspection. Current T wordmark is a temporary placeholder. Replace it using the original file without edits.
-- Existing Worker/Firebase backend, auth, database, permissions and CORS were absent and not verified. Applications, candidate private dashboard and staff management are not operational.
-- Owner confirmation required for institutional copy, approved vacancies, dates, duration, eligibility, compensation/fees, selection process and policies.
-- Privacy/terms are review drafts. Retention, legal entity, processors, rights process and operational security need owner/legal approval.
-- Deployment provider, domain canonical behavior, security headers and actual production endpoint are not configured.
+- No approved live opportunity feed or vacancy is configured. All catalog records are illustrative; dates, eligibility, duration, location, schedule and compensation are unconfirmed.
+- Application creation, secure resume upload, confirmation references, candidate authentication/profile/history, staff management and contact form processing are not implemented because the corresponding services and contracts are absent.
+- Privacy and terms copy is a draft. TARVIKA must confirm its legal entity, data purpose, processors, retention/deletion procedure, candidate rights/contact process, security practices and final legal text.
+- Confirm the canonical production hostname. Current canonical and sitemap values should be aligned with the host actually approved for deployment.
+- Confirm official opportunity content, eligibility, selection steps, mentorship arrangements, work mode and compensation before publishing any vacancy.
 
-## Verified in this source review
+## Handover checks
 
-Static pages and shared client-side interactions are present. No deployment, API request, authenticated flow, actual email delivery, application persistence, or browser/device/assistive-technology verification was performed in this environment. Run those checks after configuration; use `API-INTEGRATION.md` and `DEPLOYMENT.md` as the implementation checklist.
+Preview locally from this directory with `python -m http.server 8000`. Check the complete set of pages at target phone/tablet/desktop sizes and with keyboard and screen-reader workflows. Run browser console and link checks after host configuration. Use `API-INTEGRATION.md` for backend security and error-handling requirements. No backend, production deployment, or device lab has been verified as part of this static preview update.

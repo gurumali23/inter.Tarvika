@@ -18,19 +18,24 @@
 
 <body>
     <header class="header">
-        <div class="wrap nav-wrap"><a class="brand" href="index.html"><img class="brand-logo"
+        <div class="wrap nav-wrap"><div class="header-brand-group"><a class="brand" href="index.html"><img class="brand-logo"
                     src="assets/images/logo.png" alt="TARVIKA Research and Technology logo"><span>TARVIKA<small>RESEARCH
-                        AND TECHNOLOGY</small></span></a></div>
+                        AND TECHNOLOGY</small></span></a><div class="header-sbwm" aria-label="SBWM brand"><img class="sbwm-symbol" src="assets/images/sbwm.png" alt=""><img class="sbwm-wordmark" src="assets/images/sbwm1.png" alt="SBWM — Social Business and Web Management"></div></div></div>
     </header>
     <main class="section">
         <div class="wrap"><span class="eyebrow">404 · Page not found</span>
             <h1>This page isn't here.</h1>
-            <p>Check the link or return to the portal home.</p><a class="btn btn-primary" href="index.html">Back to
-                home</a>
+            <p>Check the address, or use one of these shortcuts to continue.</p>
+            <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(min(100%,240px),1fr));margin-top:28px">
+                <a class="card" href="internships.html"><h3>Explore opportunities</h3><p>Search the project and research examples in the catalog.</p><span class="eyebrow">Open catalog →</span></a>
+                <a class="card" href="programs.html"><h3>Browse technology domains</h3><p>Review learning foundations and responsible practice guides.</p><span class="eyebrow">View programs →</span></a>
+                <a class="card" href="faq.html"><h3>Get application guidance</h3><p>Find answers about eligibility, status and the preview.</p><span class="eyebrow">Read FAQs →</span></a>
+                <a class="card" href="contact.html"><h3>Contact TARVIKA</h3><p>Ask for verified opportunity or organization information.</p><span class="eyebrow">Contact details →</span></a>
+            </div>
         </div>
     </main>
     <footer class="footer">
-        <div class="wrap">© <span id="year"></span> TARVIKA · <a href="contact.html">Contact</a></div>
+        <div class="wrap"><span>© <span id="year"></span> TARVIKA · <a href="contact.html">Contact</a></span></div>
     </footer>
     <script>document.getElementById('year').textContent = new Date().getFullYear()</script>
 </body>
