@@ -1,1 +1,45 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Staff Integration Boundary | TARVIKA</title><meta name="description" content="Admin integration boundary for TARVIKA opportunity management."><link rel="canonical" href="https://intern.tarvika/admin.html"><meta property="og:title" content="TARVIKA Internship &amp; Career Portal"><meta property="og:type" content="website"><meta property="og:url" content="https://intern.tarvika/admin.html"><meta name="theme-color" content="#17251e"><link rel="icon" href="assets/images/logo.png" type="image/png"><link rel="stylesheet" href="css/variables.css"><link rel="stylesheet" href="css/base.css"><link rel="stylesheet" href="css/components.css"><link rel="stylesheet" href="css/pages.css"><script defer src="js/config.js"></script><script defer src="data/opportunities.js"></script><script defer src="data/program-domains.js"></script><script defer src="data/faq-data.js"></script><script defer src="js/app.js"></script></head><body data-page="admin"><a class="skip-link" href="#main">Skip to content</a><div id="site-header"></div><main id="main"></main><div id="site-footer"></div></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin Management Portal | TARVIKA Research and Technology</title>
+  <meta name="description" content="Executive administrative management console for candidate applications, opportunity publishing and candidate tracking in the TARVIKA Internship and Career Portal.">
+  <link rel="canonical" href="https://intern.tarvika/admin.html">
+  <meta property="og:title" content="TARVIKA Admin Portal">
+  <meta property="og:description" content="Candidate review and vacancy management console powered by Firebase.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://intern.tarvika/admin.html">
+  <meta name="theme-color" content="#17251e">
+  <link rel="icon" href="assets/images/logo.png" type="image/png">
+
+  <!-- Core Design Tokens & Styles -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..700;1,9..40,400..700&family=Manrope:wght@500;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/variables.css">
+  <link rel="stylesheet" href="css/base.css">
+  <link rel="stylesheet" href="css/components.css">
+  <link rel="stylesheet" href="css/pages.css">
+  <link rel="stylesheet" href="css/admin.css">
+
+  <!-- Static Opportunity Seed Data -->
+  <script src="data/opportunities.js"></script>
+  <script src="js/config.js"></script>
+
+  <!-- Firebase v13 Module Script for Admin Panel -->
+  <script type="module" src="js/admin.js"></script>
+</head>
+<body class="admin-body">
+  <div id="admin-app-root">
+    <!-- Fallback / Loading Spinner before module mounts -->
+    <div style="min-height:100vh;display:grid;place-items:center;background:#17251e;color:#ffffff;font-family:sans-serif;text-align:center;padding:20px">
+      <div>
+        <img src="assets/images/logo.png" alt="TARVIKA logo" style="width:58px;height:58px;margin-bottom:16px;object-fit:contain">
+        <h2 style="margin:0 0 8px;font-size:1.4rem;letter-spacing:0.04em">TARVIKA ADMIN PORTAL</h2>
+        <p style="margin:0;color:#c3d1c5;font-size:0.9rem">Connecting to Firebase Realtime Database (Project: tarvika-intership-pannel)...</p>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
